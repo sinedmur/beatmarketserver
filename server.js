@@ -38,8 +38,7 @@ function readDB() {
 
 // При изменении данных пишем в db.json и пушим в Git
 function writeDB(data) {
-  fs.writeFileSync(dbFile, JSON.stringify(data));
-  exec('git add db.json && git commit -m "Update DB" && git push');
+  fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
 const storage = multer.diskStorage({
