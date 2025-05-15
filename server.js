@@ -1,27 +1,42 @@
 const express = require('express');
-const cors = require('cors');
+const { MongoClient } = require('mongodb');
 const multer = require('multer');
-const { MongoClient, ObjectId } = require('mongodb');
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// MongoDB Connection
-const client = new MongoClient(process.env.MONGODB_URI || 'mongodb://localhost:27017');
+// Глобальное подключение к DB
 let db;
+let client;
 
-async function connectDB() {
+async function initDB() {
   try {
+    client = new MongoClient(process.env.MONGODB_URI);
     await client.connect();
-    db = client.db('BeatMarket');
-    console.log('Connected to MongoDB');
+    db = client.db('beatmarket');
+    console.log('Successfully connected to MongoDB');
+    return db;
   } catch (err) {
     console.error('MongoDB connection error:', err);
     process.exit(1);
   }
 }
+
+// Middleware для проверки подключения к DB
+app.use(async (req, res, next) => {
+  if (!db) {
+    try {
+      await initDB();
+      next();
+    } catch (err) {
+      res.status(500).json({ error: 'Database connection failed' });
+    }
+  } else {
+    next();
+  }
+});
 
 // Middleware
 app.use(cors({
@@ -127,6 +142,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
+// Запуск сервера
+initDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 });
