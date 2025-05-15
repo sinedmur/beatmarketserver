@@ -21,8 +21,16 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   }
 }));
 
-const dbFile = './db.json';
-if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, JSON.stringify({ beats: [], users: [] }));
+// Измените путь к файлу БД на абсолютный
+const dbFile = path.join(__dirname, 'db.json');
+
+// Добавьте проверку при старте сервера
+if (!fs.existsSync(dbFile)) {
+  fs.writeFileSync(dbFile, JSON.stringify({ beats: [], users: [] }));
+  console.log('Created new DB file');
+} else {
+  console.log('Existing DB file loaded:', JSON.parse(fs.readFileSync(dbFile)));
+}
 
 function readDB() {
   return JSON.parse(fs.readFileSync(dbFile));
