@@ -1,7 +1,8 @@
 const express = require('express');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb'); // Добавлен ObjectId
 const multer = require('multer');
 const path = require('path');
+const cors = require('cors'); // Добавлен cors
 require('dotenv').config();
 
 const app = express();
@@ -100,38 +101,54 @@ app.post('/purchase', async (req, res) => {
   try {
     const { userId, beatId } = req.body;
     
-    const beat = await Beat.findById(beatId);
+    // Используем db.collection вместо Mongoose моделей
+    const beat = await db.collection('beats').findOne({ _id: new ObjectId(beatId) });
     if (!beat) return res.status(404).json({ error: 'Beat not found' });
 
-    let user = await User.findOne({ telegramId: userId });
+    let user = await db.collection('users').findOne({ telegramId: userId });
     if (!user) {
-      user = new User({ telegramId: userId });
+      user = { telegramId: userId, balance: 0, purchases: [] };
+      await db.collection('users').insertOne(user);
     }
 
-    if (!user.purchases.includes(beatId)) {
-      user.purchases.push(beatId);
-      beat.sales += 1;
-      beat.earned += beat.price;
-      await Promise.all([user.save(), beat.save()]);
+    if (!user.purchases.includes(new ObjectId(beatId))) {
+      await db.collection('users').updateOne(
+        { telegramId: userId },
+        { $push: { purchases: new ObjectId(beatId) } }
+      );
+      
+      await db.collection('beats').updateOne(
+        { _id: new ObjectId(beatId) },
+        { $inc: { sales: 1, earned: beat.price } }
+      );
     }
 
     res.json({ success: true });
   } catch (error) {
+    console.error('Purchase error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 app.get('/user/:id', async (req, res) => {
   try {
-    let user = await User.findOne({ telegramId: req.params.id })
-      .populate('purchases');
+    let user = await db.collection('users').findOne({ telegramId: req.params.id });
     
     if (!user) {
       user = { telegramId: req.params.id, balance: 0, purchases: [] };
     }
 
+    // Если нужно получить информацию о покупках
+    if (user.purchases && user.purchases.length > 0) {
+      const purchases = await db.collection('beats').find({
+        _id: { $in: user.purchases.map(id => new ObjectId(id)) }
+      }).toArray();
+      user.purchases = purchases;
+    }
+
     res.json(user);
   } catch (error) {
+    console.error('User error:', error);
     res.status(500).json({ error: error.message });
   }
 });
