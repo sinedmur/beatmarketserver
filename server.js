@@ -1,43 +1,27 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const mongoose = require('mongoose');
+const { MongoClient, ObjectId } = require('mongodb');
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Подключение к MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/beatmarket', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
+// MongoDB Connection
+const client = new MongoClient(process.env.MONGODB_URI || 'mongodb://localhost:27017');
+let db;
 
-// Схемы Mongoose
-const BeatSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  genre: { type: String, required: true },
-  bpm: { type: Number, required: true },
-  price: { type: Number, required: true },
-  artist: { type: String, required: true },
-  cover: { type: String, required: true },
-  audio: { type: String, required: true },
-  uploadDate: { type: Date, default: Date.now },
-  sales: { type: Number, default: 0 },
-  earned: { type: Number, default: 0 }
-});
-
-const UserSchema = new mongoose.Schema({
-  telegramId: { type: String, required: true, unique: true },
-  balance: { type: Number, default: 0 },
-  purchases: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Beat' }]
-});
-
-const Beat = mongoose.model('Beat', BeatSchema);
-const User = mongoose.model('User', UserSchema);
+async function connectDB() {
+  try {
+    await client.connect();
+    db = client.db('beatmarket');
+    console.log('Connected to MongoDB');
+  } catch (err) {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  }
+}
 
 // Middleware
 app.use(cors({
@@ -47,14 +31,9 @@ app.use(cors({
 }));
 
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
-  setHeaders: (res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
-  }
-});
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Настройка Multer для загрузки файлов
+// Multer Configuration
 const storage = multer.diskStorage({
   destination: './uploads',
   filename: (_, file, cb) => {
@@ -64,13 +43,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Роуты
+// Routes
 app.get('/beats', async (req, res) => {
   try {
-    const beats = await Beat.find();
+    const beats = await db.collection('beats').find().toArray();
     res.json(beats);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -81,21 +60,23 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
     }
 
     const baseUrl = `https://${req.get('host')}`;
-    
-    const newBeat = new Beat({
+    const newBeat = {
       title: req.body.title,
       genre: req.body.genre,
-      bpm: Number(req.body.bpm),
-      price: Number(req.body.price),
+      bpm: parseInt(req.body.bpm),
+      price: parseFloat(req.body.price),
       artist: req.body.artist,
       cover: `${baseUrl}/uploads/${req.files.cover[0].filename}`,
-      audio: `${baseUrl}/uploads/${req.files.audio[0].filename}`
-    });
+      audio: `${baseUrl}/uploads/${req.files.audio[0].filename}`,
+      uploadDate: new Date(),
+      sales: 0,
+      earned: 0
+    };
 
-    await newBeat.save();
-    res.json({ success: true, beat: newBeat });
-  } catch (error) {
-    console.error('Upload error:', error);
+    const result = await db.collection('beats').insertOne(newBeat);
+    res.json({ success: true, beat: { _id: result.insertedId, ...newBeat } });
+  } catch (err) {
+    console.error('Upload error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
