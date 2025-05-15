@@ -37,6 +37,8 @@ app.get('/beats', (req, res) => {
 });
 
 app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), (req, res) => {
+  console.log('FILES RECEIVED:', req.files);
+  console.log('BODY RECEIVED:', req.body);
   const db = readDB();
   const newBeat = {
     id: Date.now().toString(),
