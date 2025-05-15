@@ -15,7 +15,7 @@ let db;
 async function connectDB() {
   try {
     await client.connect();
-    db = client.db('beatmarket');
+    db = client.db('BeatMarket');
     console.log('Connected to MongoDB');
   } catch (err) {
     console.error('MongoDB connection error:', err);
