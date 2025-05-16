@@ -1,12 +1,22 @@
 const express = require('express');
-const { MongoClient, ObjectId } = require('mongodb'); // Добавлен ObjectId
+const { MongoClient, ObjectId } = require('mongodb');
 const multer = require('multer');
 const path = require('path');
-const cors = require('cors'); // Добавлен cors
+const cors = require('cors');
+const cloudinary = require('cloudinary').v2;
+const streamifier = require('streamifier'); // Для загрузки буферов в Cloudinary
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Конфигурация Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
 
 // Глобальное подключение к DB
 let db;
@@ -47,17 +57,32 @@ app.use(cors({
 }));
 
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Multer Configuration
-const storage = multer.diskStorage({
-  destination: './uploads',
-  filename: (_, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+// Настройка Multer для обработки файлов в памяти (без сохранения на диск)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024 // 20MB (увеличьте при необходимости)
   }
 });
 
-const upload = multer({ storage });
+// Функция для загрузки в Cloudinary
+const uploadToCloudinary = (fileBuffer, folder, resourceType = 'image') => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: `beatmarket/${folder}`,
+        resource_type: resourceType
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    
+    streamifier.createReadStream(fileBuffer).pipe(uploadStream);
+  });
+};
 
 // Routes
 app.get('/beats', async (req, res) => {
@@ -75,25 +100,51 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
       return res.status(400).json({ error: 'Both cover and audio files are required' });
     }
 
-    const baseUrl = `https://${req.get('host')}`;
+    // Загружаем обложку в Cloudinary
+    const coverResult = await uploadToCloudinary(
+      req.files.cover[0].buffer,
+      'covers',
+      'image'
+    );
+
+    // Загружаем аудио в Cloudinary
+    const audioResult = await uploadToCloudinary(
+      req.files.audio[0].buffer,
+      'audio',
+      'video' // Cloudinary обрабатывает аудио как видео
+    );
+
     const newBeat = {
       title: req.body.title,
       genre: req.body.genre,
       bpm: parseInt(req.body.bpm),
       price: parseFloat(req.body.price),
       artist: req.body.artist,
-      cover: `${baseUrl}/uploads/${req.files.cover[0].filename}`,
-      audio: `${baseUrl}/uploads/${req.files.audio[0].filename}`,
+      cover: coverResult.secure_url,
+      audio: audioResult.secure_url,
       uploadDate: new Date(),
       sales: 0,
-      earned: 0
+      earned: 0,
+      cloudinary: {
+        cover_public_id: coverResult.public_id,
+        audio_public_id: audioResult.public_id
+      }
     };
 
     const result = await db.collection('beats').insertOne(newBeat);
-    res.json({ success: true, beat: { _id: result.insertedId, ...newBeat } });
+    res.json({ 
+      success: true, 
+      beat: { 
+        _id: result.insertedId, 
+        ...newBeat 
+      } 
+    });
   } catch (err) {
     console.error('Upload error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      error: 'Internal server error',
+      details: err.message 
+    });
   }
 });
 
