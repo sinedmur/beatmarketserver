@@ -125,6 +125,7 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
       uploadDate: new Date(),
       sales: 0,
       earned: 0,
+      ownerTelegramId: req.body.ownerTelegramId, // <= добавить это
       cloudinary: {
         cover_public_id: coverResult.public_id,
         audio_public_id: audioResult.public_id
@@ -146,6 +147,18 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
       details: err.message 
     });
   }
+});
+
+app.post('/favorite', async (req, res) => {
+  const { userId, beatId } = req.body;
+
+  await db.collection('users').updateOne(
+    { telegramId: userId },
+    { $addToSet: { favorites: new ObjectId(beatId) } }, // addToSet не добавит повтор
+    { upsert: true }
+  );
+
+  res.json({ success: true });
 });
 
 app.post('/purchase', async (req, res) => {
