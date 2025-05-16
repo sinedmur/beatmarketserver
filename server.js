@@ -150,16 +150,26 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
 });
 
 app.post('/favorite', async (req, res) => {
-  const { userId, beatId } = req.body;
+  const { userId, beatId, action } = req.body;
+
+  if (!userId || !beatId || !['add', 'remove'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid request' });
+  }
+
+  const update =
+    action === 'add'
+      ? { $addToSet: { favorites: new ObjectId(beatId) } }
+      : { $pull: { favorites: new ObjectId(beatId) } };
 
   await db.collection('users').updateOne(
     { telegramId: userId },
-    { $addToSet: { favorites: new ObjectId(beatId) } }, // addToSet не добавит повтор
+    update,
     { upsert: true }
   );
 
   res.json({ success: true });
 });
+
 
 app.post('/purchase', async (req, res) => {
   try {
@@ -197,17 +207,25 @@ app.post('/purchase', async (req, res) => {
 app.get('/user/:id', async (req, res) => {
   try {
     let user = await db.collection('users').findOne({ telegramId: req.params.id });
-    
+
     if (!user) {
-      user = { telegramId: req.params.id, balance: 0, purchases: [] };
+      user = { telegramId: req.params.id, balance: 0, purchases: [], favorites: [] };
     }
 
-    // Если нужно получить информацию о покупках
+    // Получаем покупки
     if (user.purchases && user.purchases.length > 0) {
       const purchases = await db.collection('beats').find({
         _id: { $in: user.purchases.map(id => new ObjectId(id)) }
       }).toArray();
       user.purchases = purchases;
+    }
+
+    // Получаем избранное
+    if (user.favorites && user.favorites.length > 0) {
+      const favorites = await db.collection('beats').find({
+        _id: { $in: user.favorites.map(id => new ObjectId(id)) }
+      }).toArray();
+      user.favorites = favorites;
     }
 
     res.json(user);
