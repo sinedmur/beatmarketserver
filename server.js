@@ -87,16 +87,119 @@ const uploadToCloudinary = (fileBuffer, folder, resourceType = 'image') => {
 // Routes
 app.get('/beats', async (req, res) => {
   try {
-    const beats = await db.collection('beats').find().toArray();
-    // Преобразуем _id в строку для удобства работы на фронтенде
+    const { producer } = req.query;
+    let query = {};
+    
+    if (producer) {
+      query.ownerTelegramId = producer;
+    }
+    
+    const beats = await db.collection('beats').find(query).toArray();
+    
+    // Преобразуем _id в строку
     const formattedBeats = beats.map(beat => ({
       ...beat,
       _id: beat._id.toString(),
-      id: beat._id.toString() // Добавляем id для совместимости
+      id: beat._id.toString()
     }));
+    
     res.json(formattedBeats);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/producers', async (req, res) => {
+  try {
+    // Получаем всех пользователей, у которых есть биты
+    const producers = await db.collection('beats').aggregate([
+      {
+        $group: {
+          _id: "$ownerTelegramId",
+          beats: { $push: "$$ROOT" }
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "telegramId",
+          as: "userInfo"
+        }
+      },
+      {
+        $unwind: "$userInfo"
+      },
+      {
+        $project: {
+          id: { $toString: "$_id" },
+          name: "$userInfo.username",
+          avatar: "$userInfo.photo_url",
+          beats: "$beats._id",
+          followers: { $size: "$userInfo.followers" || [] }
+        }
+      }
+    ]).toArray();
+
+    res.json(producers);
+  } catch (error) {
+    console.error('Error fetching producers:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/producer/:id', async (req, res) => {
+  try {
+    const producerId = req.params.id;
+    
+    // Ищем продюсера
+    const producer = await db.collection('users').findOne(
+      { telegramId: producerId },
+      { projection: { username: 1, photo_url: 1, followers: 1 } }
+    );
+    
+    if (!producer) {
+      return res.status(404).json({ error: 'Producer not found' });
+    }
+    
+    // Получаем биты продюсера
+    const beats = await db.collection('beats').find(
+      { ownerTelegramId: producerId },
+      { projection: { _id: 1 } }
+    ).toArray();
+    
+    res.json({
+      id: producerId,
+      name: producer.username || 'Unknown',
+      avatar: producer.photo_url,
+      beats: beats.map(b => b._id),
+      followers: producer.followers?.length || 0
+    });
+  } catch (error) {
+    console.error('Error fetching producer:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/follow', async (req, res) => {
+  try {
+    const { userId, producerId } = req.body;
+    
+    // Проверяем, что пользователь не подписывается на себя
+    if (userId === producerId) {
+      return res.status(400).json({ error: 'Cannot follow yourself' });
+    }
+    
+    // Добавляем подписку
+    await db.collection('users').updateOne(
+      { telegramId: producerId },
+      { $addToSet: { followers: userId } }
+    );
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Follow error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
