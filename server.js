@@ -1,10 +1,9 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const multer = require('multer');
-const path = require('path');
 const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
-const streamifier = require('streamifier'); // Для загрузки буферов в Cloudinary
+const streamifier = require('streamifier');
 require('dotenv').config();
 
 const app = express();
@@ -27,7 +26,15 @@ async function initDB() {
     client = new MongoClient(process.env.MONGODB_URI);
     await client.connect();
     db = client.db('beatmarket');
-    console.log('Successfully connected to MongoDB');
+    
+    // Создаем индексы для оптимизации
+    await db.collection('beats').createIndex({ ownerTelegramId: 1 });
+    await db.collection('users').createIndex({ telegramId: 1 });
+    await db.collection('users').createIndex({ followers: 1 });
+    await db.collection('users').createIndex({ favorites: 1 });
+    await db.collection('users').createIndex({ purchases: 1 });
+    
+    console.log('Successfully connected to MongoDB with indexes');
     return db;
   } catch (err) {
     console.error('MongoDB connection error:', err);
@@ -35,13 +42,14 @@ async function initDB() {
   }
 }
 
-// Middleware для проверки подключения к DB
+// Middleware
 app.use(async (req, res, next) => {
   if (!db) {
     try {
       await initDB();
       next();
     } catch (err) {
+      console.error('Database connection failed:', err);
       res.status(500).json({ error: 'Database connection failed' });
     }
   } else {
@@ -49,42 +57,53 @@ app.use(async (req, res, next) => {
   }
 });
 
-// Middleware
 app.use(cors({
   origin: ['https://sinedmur.github.io', 'https://127.0.0.1:5500'],
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
-// Настройка Multer для обработки файлов в памяти (без сохранения на диск)
+// Настройка Multer
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 20 * 1024 * 1024 // 20MB (увеличьте при необходимости)
-  }
+  limits: { fileSize: 20 * 1024 * 1024 }
 });
 
-// Функция для загрузки в Cloudinary
+// Вспомогательные функции
 const uploadToCloudinary = (fileBuffer, folder, resourceType = 'image') => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        folder: `beatmarket/${folder}`,
-        resource_type: resourceType
-      },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }
+      { folder: `beatmarket/${folder}`, resource_type: resourceType },
+      (error, result) => error ? reject(error) : resolve(result)
     );
-    
     streamifier.createReadStream(fileBuffer).pipe(uploadStream);
   });
 };
 
+const validateObjectId = (id) => {
+  if (!id || !ObjectId.isValid(id)) {
+    throw new Error('Invalid ID format');
+  }
+};
+
 // Routes
+/**
+ * @swagger
+ * /beats:
+ *   get:
+ *     summary: Get all beats or beats by producer
+ *     parameters:
+ *       - in: query
+ *         name: producer
+ *         schema:
+ *           type: string
+ *         description: Producer ID to filter beats
+ *     responses:
+ *       200:
+ *         description: List of beats
+ */
 app.get('/beats', async (req, res) => {
   try {
     const { producer } = req.query;
@@ -95,8 +114,6 @@ app.get('/beats', async (req, res) => {
     }
     
     const beats = await db.collection('beats').find(query).toArray();
-    
-    // Преобразуем _id в строку
     const formattedBeats = beats.map(beat => ({
       ...beat,
       _id: beat._id.toString(),
@@ -105,20 +122,24 @@ app.get('/beats', async (req, res) => {
     
     res.json(formattedBeats);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('GET /beats error:', err);
+    res.status(500).json({ error: 'Failed to get beats' });
   }
 });
 
+/**
+ * @swagger
+ * /producers:
+ *   get:
+ *     summary: Get all producers with their beats
+ *     responses:
+ *       200:
+ *         description: List of producers
+ */
 app.get('/producers', async (req, res) => {
   try {
-    // Получаем всех пользователей, у которых есть биты
     const producers = await db.collection('beats').aggregate([
-      {
-        $group: {
-          _id: "$ownerTelegramId",
-          beats: { $push: "$$ROOT" }
-        }
-      },
+      { $group: { _id: "$ownerTelegramId", beats: { $push: "$$ROOT" } } },
       {
         $lookup: {
           from: "users",
@@ -127,114 +148,194 @@ app.get('/producers', async (req, res) => {
           as: "userInfo"
         }
       },
-      {
-        $unwind: "$userInfo"
-      },
+      { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
       {
         $project: {
           id: { $toString: "$_id" },
-          name: "$userInfo.username",
-          avatar: "$userInfo.photo_url",
+          name: { $ifNull: ["$userInfo.username", "Unknown"] },
+          avatar: { $ifNull: ["$userInfo.photo_url", "https://via.placeholder.com/150"] },
           beats: "$beats._id",
-          followers: { $size: "$userInfo.followers" || [] }
+          followers: { $size: { $ifNull: ["$userInfo.followers", []] } }
         }
       }
     ]).toArray();
 
     res.json(producers);
   } catch (error) {
-    console.error('Error fetching producers:', error);
-    res.status(500).json({ error: error.message });
+    console.error('GET /producers error:', error);
+    res.status(500).json({ error: 'Failed to get producers' });
   }
 });
 
+/**
+ * @swagger
+ * /producer/{id}:
+ *   get:
+ *     summary: Get producer details by ID
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Producer details
+ *       404:
+ *         description: Producer not found
+ */
 app.get('/producer/:id', async (req, res) => {
   try {
     const producerId = req.params.id;
-    
-    // Ищем продюсера
-    const producer = await db.collection('users').findOne(
-      { telegramId: producerId },
-      { projection: { username: 1, photo_url: 1, followers: 1 } }
-    );
-    
-    if (!producer) {
-      return res.status(404).json({ error: 'Producer not found' });
-    }
-    
-    // Получаем биты продюсера
-    const beats = await db.collection('beats').find(
-      { ownerTelegramId: producerId },
-      { projection: { _id: 1 } }
-    ).toArray();
-    
-    res.json({
-      id: producerId,
-      name: producer.username || 'Unknown',
-      avatar: producer.photo_url,
-      beats: beats.map(b => b._id),
-      followers: producer.followers?.length || 0
-    });
+    if (!producerId) return res.status(400).json({ error: 'Producer ID is required' });
+
+    const result = await db.collection('users').aggregate([
+      { $match: { telegramId: producerId } },
+      {
+        $lookup: {
+          from: "beats",
+          localField: "telegramId",
+          foreignField: "ownerTelegramId",
+          as: "beats"
+        }
+      },
+      {
+        $project: {
+          id: "$telegramId",
+          name: { $ifNull: ["$username", "Unknown"] },
+          avatar: { $ifNull: ["$photo_url", "https://via.placeholder.com/150"] },
+          beats: "$beats._id",
+          followers: { $size: { $ifNull: ["$followers", []] } }
+        }
+      }
+    ]).next();
+
+    if (!result) return res.status(404).json({ error: 'Producer not found' });
+    res.json(result);
   } catch (error) {
-    console.error('Error fetching producer:', error);
-    res.status(500).json({ error: error.message });
+    console.error('GET /producer/:id error:', error);
+    res.status(500).json({ error: 'Failed to get producer' });
   }
 });
 
+/**
+ * @swagger
+ * /follow:
+ *   post:
+ *     summary: Follow a producer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               producerId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Successfully followed
+ *       400:
+ *         description: Cannot follow yourself
+ */
 app.post('/follow', async (req, res) => {
   try {
     const { userId, producerId } = req.body;
-    
-    // Проверяем, что пользователь не подписывается на себя
+    if (!userId || !producerId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
     if (userId === producerId) {
       return res.status(400).json({ error: 'Cannot follow yourself' });
     }
-    
-    // Добавляем подписку
+
+    // Проверяем существование пользователя и продюсера
+    const [user, producer] = await Promise.all([
+      db.collection('users').findOne({ telegramId: userId }),
+      db.collection('users').findOne({ telegramId: producerId })
+    ]);
+
+    if (!user || !producer) {
+      return res.status(404).json({ error: 'User or producer not found' });
+    }
+
     await db.collection('users').updateOne(
       { telegramId: producerId },
       { $addToSet: { followers: userId } }
     );
-    
+
+    console.log(`User ${userId} followed producer ${producerId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Follow error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('POST /follow error:', error);
+    res.status(500).json({ error: 'Failed to follow producer' });
   }
 });
 
+/**
+ * @swagger
+ * /upload:
+ *   post:
+ *     summary: Upload a new beat
+ *     consumes:
+ *       - multipart/form-data
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               genre:
+ *                 type: string
+ *               bpm:
+ *                 type: number
+ *               price:
+ *                 type: number
+ *               artist:
+ *                 type: string
+ *               ownerTelegramId:
+ *                 type: string
+ *               cover:
+ *                 type: string
+ *                 format: binary
+ *               audio:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Beat uploaded successfully
+ */
 app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async (req, res) => {
   try {
     if (!req.files?.cover || !req.files?.audio) {
       return res.status(400).json({ error: 'Both cover and audio files are required' });
     }
 
-    // Загружаем обложку в Cloudinary
-    const coverResult = await uploadToCloudinary(
-      req.files.cover[0].buffer,
-      'covers',
-      'image'
-    );
+    const { title, genre, bpm, price, artist, ownerTelegramId } = req.body;
+    if (!title || !genre || !bpm || !price || !ownerTelegramId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
 
-    // Загружаем аудио в Cloudinary
-    const audioResult = await uploadToCloudinary(
-      req.files.audio[0].buffer,
-      'audio',
-      'video' // Cloudinary обрабатывает аудио как видео
-    );
+    const [coverResult, audioResult] = await Promise.all([
+      uploadToCloudinary(req.files.cover[0].buffer, 'covers', 'image'),
+      uploadToCloudinary(req.files.audio[0].buffer, 'audio', 'video')
+    ]);
 
     const newBeat = {
-      title: req.body.title,
-      genre: req.body.genre,
-      bpm: parseInt(req.body.bpm),
-      price: parseFloat(req.body.price),
-      artist: req.body.artist,
+      title,
+      genre,
+      bpm: parseInt(bpm),
+      price: parseFloat(price),
+      artist: artist || 'Unknown',
       cover: coverResult.secure_url,
       audio: audioResult.secure_url,
       uploadDate: new Date(),
       sales: 0,
       earned: 0,
-      ownerTelegramId: req.body.ownerTelegramId, // <= добавить это
+      ownerTelegramId,
       cloudinary: {
         cover_public_id: coverResult.public_id,
         audio_public_id: audioResult.public_id
@@ -242,76 +343,134 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
     };
 
     const result = await db.collection('beats').insertOne(newBeat);
+    
+    // Обновляем информацию о продюсере
+    await db.collection('users').updateOne(
+      { telegramId: ownerTelegramId },
+      { $setOnInsert: { telegramId: ownerTelegramId, username: artist } },
+      { upsert: true }
+    );
+
+    console.log(`New beat uploaded by ${ownerTelegramId}: ${title}`);
     res.json({ 
       success: true, 
       beat: { 
-        _id: result.insertedId, 
+        _id: result.insertedId.toString(), 
         ...newBeat 
       } 
     });
   } catch (err) {
-    console.error('Upload error:', err);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      details: err.message 
-    });
+    console.error('POST /upload error:', err);
+    res.status(500).json({ error: 'Failed to upload beat' });
   }
 });
 
+/**
+ * @swagger
+ * /favorite:
+ *   post:
+ *     summary: Add/remove beat from favorites
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               beatId:
+ *                 type: string
+ *               action:
+ *                 type: string
+ *                 enum: [add, remove]
+ *     responses:
+ *       200:
+ *         description: Favorites updated
+ */
 app.post('/favorite', async (req, res) => {
-  const { userId, beatId, action } = req.body;
+  try {
+    const { userId, beatId, action } = req.body;
+    if (!userId || !beatId || !['add', 'remove'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid request' });
+    }
 
-  if (!userId || !beatId || !['add', 'remove'].includes(action)) {
-    return res.status(400).json({ error: 'Invalid request' });
-  }
+    validateObjectId(beatId);
 
-  const update =
-    action === 'add'
-      ? { $addToSet: { favorites: new ObjectId(beatId) } }
+    const update = action === 'add' 
+      ? { $addToSet: { favorites: new ObjectId(beatId) } } 
       : { $pull: { favorites: new ObjectId(beatId) } };
 
-  await db.collection('users').updateOne(
-    { telegramId: userId },
-    update,
-    { upsert: true }
-  );
+    await db.collection('users').updateOne(
+      { telegramId: userId },
+      update,
+      { upsert: true }
+    );
 
-  res.json({ success: true });
+    console.log(`User ${userId} ${action === 'add' ? 'added' : 'removed'} beat ${beatId} to favorites`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /favorite error:', error);
+    res.status(500).json({ error: 'Failed to update favorites' });
+  }
 });
 
+/**
+ * @swagger
+ * /beat/{id}:
+ *   delete:
+ *     summary: Delete a beat
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Beat deleted
+ *       403:
+ *         description: Not the owner
+ */
 app.delete('/beat/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { userId } = req.body;
 
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid beat ID' });
-    }
+    validateObjectId(id);
+    if (!userId) return res.status(400).json({ error: 'User ID is required' });
 
-    // Проверяем, что бит принадлежит пользователю
     const beat = await db.collection('beats').findOne({ 
       _id: new ObjectId(id),
       ownerTelegramId: userId
     });
 
     if (!beat) {
-      return res.status(404).json({ 
+      return res.status(403).json({ 
         error: 'Beat not found or you are not the owner' 
       });
     }
 
-    // Удаляем из Cloudinary (если нужно)
-    if (beat.cloudinary?.audio_public_id) {
-      await cloudinary.uploader.destroy(beat.cloudinary.audio_public_id, {
-        resource_type: 'video'
-      });
-    }
+    // Удаляем файлы из Cloudinary
+    await Promise.all([
+      beat.cloudinary?.audio_public_id 
+        ? cloudinary.uploader.destroy(beat.cloudinary.audio_public_id, { resource_type: 'video' }) 
+        : Promise.resolve(),
+      beat.cloudinary?.cover_public_id 
+        ? cloudinary.uploader.destroy(beat.cloudinary.cover_public_id) 
+        : Promise.resolve()
+    ]);
 
-    if (beat.cloudinary?.cover_public_id) {
-      await cloudinary.uploader.destroy(beat.cloudinary.cover_public_id);
-    }
-
-    // Удаляем из базы данных
+    // Удаляем из базы
     await db.collection('beats').deleteOne({ _id: new ObjectId(id) });
 
     // Удаляем из избранного пользователей
@@ -320,81 +479,132 @@ app.delete('/beat/:id', async (req, res) => {
       { $pull: { favorites: new ObjectId(id) } }
     );
 
+    console.log(`Beat ${id} deleted by user ${userId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Delete beat error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('DELETE /beat/:id error:', error);
+    res.status(500).json({ error: 'Failed to delete beat' });
   }
 });
 
+/**
+ * @swagger
+ * /purchase:
+ *   post:
+ *     summary: Purchase a beat
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               beatId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Purchase successful
+ */
 app.post('/purchase', async (req, res) => {
   try {
     const { userId, beatId } = req.body;
-    
-    // Используем db.collection вместо Mongoose моделей
-    const beat = await db.collection('beats').findOne({ _id: new ObjectId(beatId) });
+    if (!userId || !beatId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    validateObjectId(beatId);
+
+    const [beat, user] = await Promise.all([
+      db.collection('beats').findOne({ _id: new ObjectId(beatId) }),
+      db.collection('users').findOne({ telegramId: userId }) || 
+        db.collection('users').insertOne({ 
+          telegramId: userId, 
+          balance: 0, 
+          purchases: [] 
+        }).then(() => ({ telegramId: userId, purchases: [] }))
+    ]);
+
     if (!beat) return res.status(404).json({ error: 'Beat not found' });
 
-    let user = await db.collection('users').findOne({ telegramId: userId });
-    if (!user) {
-      user = { telegramId: userId, balance: 0, purchases: [] };
-      await db.collection('users').insertOne(user);
+    if (!user.purchases.some(p => p.equals(new ObjectId(beatId)))) {
+      await Promise.all([
+        db.collection('users').updateOne(
+          { telegramId: userId },
+          { $addToSet: { purchases: new ObjectId(beatId) } }
+        ),
+        db.collection('beats').updateOne(
+          { _id: new ObjectId(beatId) },
+          { $inc: { sales: 1, earned: beat.price } }
+        )
+      ]);
     }
 
-    if (!user.purchases.includes(new ObjectId(beatId))) {
-      await db.collection('users').updateOne(
-        { telegramId: userId },
-        { $push: { purchases: new ObjectId(beatId) } }
-      );
-      
-      await db.collection('beats').updateOne(
-        { _id: new ObjectId(beatId) },
-        { $inc: { sales: 1, earned: beat.price } }
-      );
-    }
-
+    console.log(`User ${userId} purchased beat ${beatId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Purchase error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('POST /purchase error:', error);
+    res.status(500).json({ error: 'Failed to process purchase' });
   }
 });
 
+/**
+ * @swagger
+ * /user/{id}:
+ *   get:
+ *     summary: Get user details
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User details
+ */
 app.get('/user/:id', async (req, res) => {
   try {
-    let user = await db.collection('users').findOne({ telegramId: req.params.id });
+    const userId = req.params.id;
+    if (!userId) return res.status(400).json({ error: 'User ID is required' });
 
-    if (!user) {
-      user = { telegramId: req.params.id, balance: 0, purchases: [], favorites: [] };
-    }
+    const user = await db.collection('users').findOne({ telegramId: userId }) || {
+      telegramId: userId,
+      balance: 0,
+      purchases: [],
+      favorites: []
+    };
 
-    // Получаем покупки
-    if (user.purchases && user.purchases.length > 0) {
-      const purchases = await db.collection('beats').find({
-        _id: { $in: user.purchases.map(id => new ObjectId(id)) }
-      }).toArray();
-      user.purchases = purchases;
-    }
+    // Получаем полную информацию о покупках и избранном
+    const [purchases, favorites] = await Promise.all([
+      user.purchases?.length 
+        ? db.collection('beats').find({ 
+            _id: { $in: user.purchases } 
+          }).toArray() 
+        : [],
+      user.favorites?.length 
+        ? db.collection('beats').find({ 
+            _id: { $in: user.favorites } 
+          }).toArray() 
+        : []
+    ]);
 
-    // Получаем избранное
-    if (user.favorites && user.favorites.length > 0) {
-      const favorites = await db.collection('beats').find({
-        _id: { $in: user.favorites.map(id => new ObjectId(id)) }
-      }).toArray();
-      user.favorites = favorites;
-    }
-
-    res.json(user);
+    res.json({
+      ...user,
+      purchases: purchases.map(b => ({ ...b, _id: b._id.toString() })),
+      favorites: favorites.map(b => ({ ...b, _id: b._id.toString() }))
+    });
   } catch (error) {
-    console.error('User error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('GET /user/:id error:', error);
+    res.status(500).json({ error: 'Failed to get user data' });
   }
 });
 
 // Обработчик ошибок
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('Global error handler:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Запуск сервера
