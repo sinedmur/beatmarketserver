@@ -176,6 +176,53 @@ app.post('/favorite', async (req, res) => {
   res.json({ success: true });
 });
 
+app.delete('/beat/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: 'Invalid beat ID' });
+    }
+
+    // Проверяем, что бит принадлежит пользователю
+    const beat = await db.collection('beats').findOne({ 
+      _id: new ObjectId(id),
+      ownerTelegramId: userId
+    });
+
+    if (!beat) {
+      return res.status(404).json({ 
+        error: 'Beat not found or you are not the owner' 
+      });
+    }
+
+    // Удаляем из Cloudinary (если нужно)
+    if (beat.cloudinary?.audio_public_id) {
+      await cloudinary.uploader.destroy(beat.cloudinary.audio_public_id, {
+        resource_type: 'video'
+      });
+    }
+
+    if (beat.cloudinary?.cover_public_id) {
+      await cloudinary.uploader.destroy(beat.cloudinary.cover_public_id);
+    }
+
+    // Удаляем из базы данных
+    await db.collection('beats').deleteOne({ _id: new ObjectId(id) });
+
+    // Удаляем из избранного пользователей
+    await db.collection('users').updateMany(
+      { favorites: new ObjectId(id) },
+      { $pull: { favorites: new ObjectId(id) } }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete beat error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 app.post('/purchase', async (req, res) => {
   try {
