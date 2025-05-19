@@ -88,7 +88,13 @@ const uploadToCloudinary = (fileBuffer, folder, resourceType = 'image') => {
 app.get('/beats', async (req, res) => {
   try {
     const beats = await db.collection('beats').find().toArray();
-    res.json(beats);
+    // Преобразуем _id в строку для удобства работы на фронтенде
+    const formattedBeats = beats.map(beat => ({
+      ...beat,
+      _id: beat._id.toString(),
+      id: beat._id.toString() // Добавляем id для совместимости
+    }));
+    res.json(formattedBeats);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
