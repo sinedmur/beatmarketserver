@@ -205,7 +205,8 @@ app.get('/producer/:id', async (req, res) => {
           name: { $ifNull: ["$username", "Unknown"] },
           avatar: { $ifNull: ["$photo_url", "https://via.placeholder.com/150"] },
           beats: "$beats._id",
-          followers: { $size: { $ifNull: ["$followers", []] } }
+          followers: { $size: { $ifNull: ["$followers", []] } },
+          followersList: { $ifNull: ["$followers", []] }
         }
       }
     ]).next();
