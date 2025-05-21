@@ -150,7 +150,6 @@ app.get('/producers', async (req, res) => {
       },
       { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
       {
-      {
         $project: {
           id: "$telegramId",
           name: { $ifNull: ["$username", "Unknown"] },
