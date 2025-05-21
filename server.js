@@ -275,6 +275,46 @@ app.post('/follow', async (req, res) => {
 
 /**
  * @swagger
+ * /unfollow:
+ *   post:
+ *     summary: Unfollow a producer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               producerId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Successfully unfollowed
+ */
+app.post('/unfollow', async (req, res) => {
+  try {
+    const { userId, producerId } = req.body;
+    if (!userId || !producerId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    await db.collection('users').updateOne(
+      { telegramId: producerId },
+      { $pull: { followers: userId } }
+    );
+
+    console.log(`User ${userId} unfollowed producer ${producerId}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /unfollow error:', error);
+    res.status(500).json({ error: 'Failed to unfollow producer' });
+  }
+});
+
+/**
+ * @swagger
  * /upload:
  *   post:
  *     summary: Upload a new beat
