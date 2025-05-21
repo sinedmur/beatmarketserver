@@ -150,12 +150,14 @@ app.get('/producers', async (req, res) => {
       },
       { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
       {
+      {
         $project: {
-          id: { $toString: "$_id" },
-          name: { $ifNull: ["$userInfo.username", "Unknown"] },
-          avatar: { $ifNull: ["$userInfo.photo_url", "https://via.placeholder.com/150"] },
+          id: "$telegramId",
+          name: { $ifNull: ["$username", "Unknown"] },
+          avatar: { $ifNull: ["$photo_url", "https://via.placeholder.com/150"] },
           beats: "$beats._id",
-          followers: { $size: { $ifNull: ["$userInfo.followers", []] } }
+          followers: { $size: { $ifNull: ["$followers", []] } },
+          followersList: { $ifNull: ["$followers", []] } // <=== добавляем список ID подписчиков
         }
       }
     ]).toArray();
