@@ -239,27 +239,29 @@ app.get('/producer/:id', async (req, res) => {
  *     responses:
  *       200:
  *         description: Successfully followed
- *       400:
- *         description: Cannot follow yourself
  */
 app.post('/follow', async (req, res) => {
   try {
     const { userId, producerId } = req.body;
+
     if (!userId || !producerId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
+
     if (userId === producerId) {
       return res.status(400).json({ error: 'Cannot follow yourself' });
     }
 
-    // Проверяем существование пользователя и продюсера
-    const [user, producer] = await Promise.all([
-      db.collection('users').findOne({ telegramId: userId }),
-      db.collection('users').findOne({ telegramId: producerId })
-    ]);
+    // Создаем пользователя, если его нет
+    const userResult = await db.collection('users').findOneAndUpdate(
+      { telegramId: userId },
+      { $setOnInsert: { telegramId: userId } },
+      { upsert: true, returnDocument: 'after' }
+    );
 
-    if (!user || !producer) {
-      return res.status(404).json({ error: 'User or producer not found' });
+    const producer = await db.collection('users').findOne({ telegramId: producerId });
+    if (!producer) {
+      return res.status(404).json({ error: 'Producer not found' });
     }
 
     await db.collection('users').updateOne(
@@ -267,10 +269,10 @@ app.post('/follow', async (req, res) => {
       { $addToSet: { followers: userId } }
     );
 
-    console.log(`User ${userId} followed producer ${producerId}`);
+    console.log(`✅ FOLLOW: user ${userId} followed producer ${producerId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('POST /follow error:', error);
+    console.error('❌ POST /follow error:', error);
     res.status(500).json({ error: 'Failed to follow producer' });
   }
 });
@@ -298,6 +300,7 @@ app.post('/follow', async (req, res) => {
 app.post('/unfollow', async (req, res) => {
   try {
     const { userId, producerId } = req.body;
+
     if (!userId || !producerId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -307,13 +310,14 @@ app.post('/unfollow', async (req, res) => {
       { $pull: { followers: userId } }
     );
 
-    console.log(`User ${userId} unfollowed producer ${producerId}`);
+    console.log(`✅ UNFOLLOW: user ${userId} unfollowed producer ${producerId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('POST /unfollow error:', error);
+    console.error('❌ POST /unfollow error:', error);
     res.status(500).json({ error: 'Failed to unfollow producer' });
   }
 });
+
 
 /**
  * @swagger
