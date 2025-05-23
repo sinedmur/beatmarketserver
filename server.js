@@ -416,7 +416,12 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
     // Обновляем информацию о продюсере
     await db.collection('users').updateOne(
       { telegramId: ownerTelegramId },
-      { $setOnInsert: { telegramId: ownerTelegramId, username: artist, photo_url: tg.initDataUnsafe.user?.photo_url } },
+      { 
+        $set: { 
+          username: artist,
+          photo_url: tg.initDataUnsafe.user?.photo_url 
+        } 
+      },
       { upsert: true }
     );
 
