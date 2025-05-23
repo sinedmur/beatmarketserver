@@ -136,27 +136,32 @@ app.get('/beats', async (req, res) => {
  *       200:
  *         description: List of producers
  */
+// Измененный endpoint для получения продюсеров
 app.get('/producers', async (req, res) => {
   try {
-    const producers = await db.collection('beats').aggregate([
-      { $group: { _id: "$ownerTelegramId", beats: { $push: "$$ROOT" } } },
+    // Сначала получаем всех пользователей, у которых есть биты
+    const producers = await db.collection('users').aggregate([
       {
         $lookup: {
-          from: "users",
-          localField: "_id",
-          foreignField: "telegramId",
-          as: "userInfo"
+          from: "beats",
+          localField: "telegramId",
+          foreignField: "ownerTelegramId",
+          as: "beats"
         }
       },
-      { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
-     {
+      {
+        $match: {
+          "beats.0": { $exists: true } // Только пользователи с битами
+        }
+      },
+      {
         $project: {
           id: "$telegramId",
-          name: { $ifNull: ["$userInfo.username", "Unknown"] },
-          avatar: { $ifNull: ["$userInfo.photo_url", "https://via.placeholder.com/150"] },
+          name: { $ifNull: ["$username", "Unknown"] },
+          avatar: { $ifNull: ["$photo_url", "https://via.placeholder.com/150"] },
           beats: "$beats._id",
-          followers: { $size: { $ifNull: ["$userInfo.followers", []] } },
-          followersList: { $ifNull: ["$userInfo.followers", []] }
+          followers: { $size: { $ifNull: ["$followers", []] } },
+          followersList: { $ifNull: ["$followers", []] }
         }
       }
     ]).toArray();
@@ -185,6 +190,7 @@ app.get('/producers', async (req, res) => {
  *       404:
  *         description: Producer not found
  */
+// Измененный endpoint для получения конкретного продюсера
 app.get('/producer/:id', async (req, res) => {
   try {
     const producerId = req.params.id;
