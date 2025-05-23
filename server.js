@@ -153,7 +153,7 @@ app.get('/producers', async (req, res) => {
         $project: {
           id: "$telegramId",
           name: { $ifNull: ["$userInfo.username", "Unknown"] },
-          avatar: { $ifNull: ["$userInfo.photo_url"] },
+          avatar: "$userInfo.photo_url",
           beats: "$beats._id",
           followers: { $size: { $ifNull: ["$userInfo.followers", []] } },
           followersList: { $ifNull: ["$userInfo.followers", []] }
@@ -204,7 +204,7 @@ app.get('/producer/:id', async (req, res) => {
         $project: {
           id: "$telegramId",
           name: { $ifNull: ["$username", "Unknown"] },
-          avatar: { $ifNull: ["$photo_url"] },
+          avatar: "$photo_url",
           beats: "$beats._id",
           followers: { $size: { $ifNull: ["$followers", []] } },
           followersList: { $ifNull: ["$followers", []] }
