@@ -367,6 +367,8 @@ app.post('/unfollow', async (req, res) => {
  *                 type: string
  *               ownerTelegramId:
  *                 type: string
+ *               photo_url:
+ *                 type: string
  *               cover:
  *                 type: string
  *                 format: binary
@@ -383,7 +385,7 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
       return res.status(400).json({ error: 'Both cover and audio files are required' });
     }
 
-    const { title, genre, bpm, price, artist, ownerTelegramId } = req.body;
+    const { title, genre, bpm, price, artist, ownerTelegramId, photo_url } = req.body;
     if (!title || !genre || !bpm || !price || !ownerTelegramId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -419,8 +421,15 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
       { 
         $set: { 
           username: artist,
-          photo_url: tg.initDataUnsafe.user?.photo_url 
-        } 
+          photo_url: photo_url || null
+        },
+        $setOnInsert: {
+          telegramId: ownerTelegramId,
+          balance: 0,
+          purchases: [],
+          favorites: [],
+          followers: []
+        }
       },
       { upsert: true }
     );
