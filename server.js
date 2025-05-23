@@ -226,6 +226,23 @@ app.get('/producer/:id', async (req, res) => {
   }
 });
 
+app.post('/producer', async (req, res) => {
+  try {
+    const { telegramId, username, photo_url } = req.body;
+    
+    const result = await db.collection('users').updateOne(
+      { telegramId },
+      { $set: { username, photo_url } },
+      { upsert: true }
+    );
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /producer error:', error);
+    res.status(500).json({ error: 'Failed to update producer' });
+  }
+});
+
 /**
  * @swagger
  * /follow:
@@ -399,7 +416,7 @@ app.post('/upload', upload.fields([{ name: 'cover' }, { name: 'audio' }]), async
     // Обновляем информацию о продюсере
     await db.collection('users').updateOne(
       { telegramId: ownerTelegramId },
-      { $setOnInsert: { telegramId: ownerTelegramId, username: artist } },
+      { $setOnInsert: { telegramId: ownerTelegramId, username: artist, photo_url: tg.initDataUnsafe.user?.photo_url } },
       { upsert: true }
     );
 
